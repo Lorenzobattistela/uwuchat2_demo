@@ -1,5 +1,6 @@
 import * as sm from './state_machine';
 import { UwUChat2Client } from 'uwuchat2';
+import { Map } from 'immutable';
 
 // Types
 // -----
@@ -26,7 +27,7 @@ type Player = {
 
 type GameState = {
   tick    : number,
-  players : { [key: UID]: Player },
+  players: Map<UID, Player>,
 };
 
 type Action
@@ -38,39 +39,57 @@ type Action
 
 // Initial State
 function init(): GameState {
-  return { tick: 0, players: {} };
+  return { tick: 0, players: Map<UID, Player>() };
 }
 
 // Computes an Action
 function when(when: Action, gs: GameState): GameState {
-  var gs = JSON.parse(JSON.stringify(gs)) as GameState; // FIXME: use immutable.js instead
-  if (!gs.players[when.pid]) {
-    gs.players[when.pid] = { id: when.pid, name: "Anon", pos: { x: 256, y: 128 }, key: {} };
+  let players = gs.players;
+  if (!players.has(when.pid)) {
+    players = players.set(when.pid, { id: when.pid, name: "Anon", pos: { x: 256, y: 128 }, key: {} });
   }
+
   switch (when.$) {
     case "SetNick": {
-      gs.players[when.pid].name = when.name;
+      players = players.update(when.pid, player => ({ ...player, name: when.name } as Player));
       break;
     }
+
     case "KeyEvent": {
-      gs.players[when.pid].key[when.key] = when.down;
+      players = players.update(when.pid, player => {
+        if (!player) { return player };
+        const newKey = { ...player.key, [when.key]: when.down };
+        return { ...player, key: newKey } as Player;
+      });
       break;
     }
   }
-  return gs;
+  return { ...gs, players };
 }
 
 // Computes a Tick
 function tick(gs: GameState): GameState {
-  var gs = JSON.parse(JSON.stringify(gs)) as GameState; // FIXME: use immutable.js instead
-  var dt = 1 / TPS;
-  for (var pid in gs.players) {
-    var obj = gs.players[pid];
-    obj.pos.x += ((obj.key["D"] ? 1 : 0) + (obj.key["A"] ? -1 : 0)) * dt * 128;
-    obj.pos.y += ((obj.key["S"] ? 1 : 0) + (obj.key["W"] ? -1 : 0)) * dt * 128;
-  }
-  gs.tick += 1;
-  return gs;
+  const dt = 1 / TPS;
+  const players = gs.players.map((player, uid) => {
+    if (!player) return player;
+    
+    const dx = ((player.key["D"] ? 1 : 0) + (player.key["A"] ? -1 : 0)) * dt * 128;
+    const dy = ((player.key["S"] ? 1 : 0) + (player.key["W"] ? -1 : 0)) * dt * 128;
+    
+    return {
+      ...player,
+      pos: {
+        x: player.pos.x + dx,
+        y: player.pos.y + dy
+      }
+    };
+  }).toMap();
+
+  return {
+    ...gs,
+    tick: gs.tick + 1,
+    players: players as Map<UID, Player>
+  };
 }
 
 // Renders the GameState on the canvas
@@ -84,7 +103,7 @@ function draw(gs: GameState): void {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // Draw the player as a filled gray circle, centered around their pos, with the name in a small font above the circle
-  for (const player of Object.values(gs.players)) {
+  gs.players.forEach(player => {
     // Draw player circle
     ctx.beginPath();
     ctx.arc(player.pos.x, player.pos.y, 15, 0, 2 * Math.PI);
@@ -96,7 +115,7 @@ function draw(gs: GameState): void {
     ctx.font = '12px Arial';
     ctx.textAlign = 'center';
     ctx.fillText(player.name, player.pos.x, player.pos.y - 20);
-  }
+  });
 }
 
 // Serialization
@@ -165,8 +184,8 @@ var mach : sm.Mach<GameState, Action> = sm.new_mach(TPS);
 
 // Connects to Server
 const client = new UwUChat2Client();
-await client.init('ws://localhost:7171');
-//await client.init('ws://server.uwu.games');
+//await client.init('ws://localhost:7171');
+await client.init('ws://server.uwu.games');
 
 // Joins Room & Handles Messages
 const leave = client.recv(room, msg => {
